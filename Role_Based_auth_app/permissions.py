@@ -1,80 +1,157 @@
+from rest_framework import permissions
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 
-from rest_framework import serializers
-from .models import ProductImage, Product, Subscription, Usage, FileUpload, APIKey, Notification, ActivityLog
-
-class ProductImageSerializer(serializers.ModelSerializer):
-  class Meta:
-    model = ProductImage
-    fields = '__all__'
-    read_only_fields = ('id', 'created_at')
-
-class ProductSerializer(serializers.ModelSerializer):
-  images = ProductImageSerializer(many=True, read_only=True)
-  effective_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-  is_in_stock = serializers.BooleanField(read_only=True)
-  profit_margin = serializers.SerializerMethodField()
-
-  def get_profit_margin(self, obj):
-    return float(obj.profit_margin) if obj.profit_margin is not None else 0
-
-  class Meta:
-    model = Product
-    fields = '__all__'
-    read_only_fields = (
-      'id', 'organization', 'created_at', 'updated_at', 'created_by', 'updated_by',
-      'view_count', 'rating', 'review_count', 'sku', 'effective_price', 'is_in_stock'
-    )
-
-class SubscriptionSerializer(serializers.ModelSerializer):
-  is_active = serializers.BooleanField(read_only=True)
-
-  class Meta:
-    model = Subscription
-    fields = '__all__'
-    read_only_fields = ('id', 'created_at', 'updated_at')
-
-class UsageSerializer(serializers.ModelSerializer):
-  usage_percentage = serializers.FloatField(read_only=True)
-  is_limit_exceeded = serializers.BooleanField(read_only=True)
-
-  class Meta:
-    model = Usage
-    fields = '__all__'
-    read_only_fields = ('id', 'created_at', 'updated_at')
+class IsOwner(permissions.BasePermission):
+    """
+    Custom permission to only allow owners of an object to edit it.
+    """
+    
+    def has_object_permission(self, request, view, obj):
+        # Read permissions are allowed to any request,
+        # so we'll always allow GET, HEAD or OPTIONS requests.
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        
+        # Write permissions are only allowed to the owner of the object.
+        return obj.created_by == request.user
 
 
-class FileUploadSerializer(serializers.ModelSerializer):
-  file_size_formatted = serializers.CharField(read_only=True)
-
-  class Meta:
-    model = FileUpload
-    fields = '__all__'
-    read_only_fields = ('id', 'uploaded_by', 'organization', 'file_size', 'download_count', 'created_at', 'updated_at')
-
-
-
-class APIKeySerializer(serializers.ModelSerializer):
-  is_expired = serializers.BooleanField(read_only=True)
-
-  class Meta:
-    model = APIKey
-    fields = '__all__'
-fields = '__all__'
-read_only_fields = ('id', 'key', 'key_preview', 'usage_count', 'last_used', 'created_at', 'updated_at')
+class IsAdminOrOwner(permissions.BasePermission):
+    """
+    Custom permission to allow access to admin users or owners.
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return request.user.role in ['admin', 'owner'] or request.user.is_staff
+        return False
 
 
+class IsManagerOrAbove(permissions.BasePermission):
+    """
+    Custom permission to allow access to manager, admin, or owner roles.
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return request.user.role in ['manager', 'admin', 'owner'] or request.user.is_staff
+        return False
 
-class NotificationSerializer(serializers.ModelSerializer):
-  class Meta:
-    model = Notification
-    fields = '__all__'
-    read_only_fields = ('id', 'created_at', 'read_at', 'organization')
+
+class IsSameOrganization(permissions.BasePermission):
+    """
+    Custom permission to ensure user can only access data from their organization.
+    """
+    
+    def has_object_permission(self, request, view, obj):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Check if object has organization attribute
+        if hasattr(obj, 'organization'):
+            return obj.organization == request.user.organization
+        
+        # Check if object is a user in same organization
+        if isinstance(obj, User):
+            return obj.organization == request.user.organization
+        
+        return True
 
 
+class CanCreateUsers(permissions.BasePermission):
+    """
+    Permission for creating new users (admin and owner only).
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return request.user.role in ['admin', 'owner'] or request.user.is_staff
+        return False
 
-class ActivityLogSerializer(serializers.ModelSerializer):
-  class Meta:
-    model = ActivityLog
-    fields = '__all__'
-    read_only_fields = ('id', 'created_at')
+
+class CanManageProducts(permissions.BasePermission):
+    """
+    Permission for managing products (manager and above).
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            if request.method in permissions.SAFE_METHODS:
+                return True
+            return request.user.role in ['manager', 'admin', 'owner'] or request.user.is_staff
+        return False
+
+
+class CanDeleteProducts(permissions.BasePermission):
+    """
+    Permission for deleting products (admin and owner only).
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            if request.method != 'DELETE':
+                return True
+            return request.user.role in ['admin', 'owner'] or request.user.is_staff
+        return False
+
+
+class IsOwnerOrReadOnly(permissions.BasePermission):
+    """
+    Custom permission to only allow owners of an object to edit it.
+    Others can only read.
+    """
+    
+    def has_object_permission(self, request, view, obj):
+        # Read permissions are allowed to any request,
+        # so we'll always allow GET, HEAD or OPTIONS requests.
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        
+        # Write permissions are only allowed to the owner of the object.
+        if hasattr(obj, 'created_by'):
+            return obj.created_by == request.user
+        elif hasattr(obj, 'user'):
+            return obj.user == request.user
+        elif isinstance(obj, User):
+            return obj == request.user
+        
+        return False
+
+
+class IsOrganizationOwner(permissions.BasePermission):
+    """
+    Permission for organization owners only.
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return request.user.role == 'owner' or request.user.is_staff
+        return False
+
+
+class CanViewAnalytics(permissions.BasePermission):
+    """
+    Permission for viewing analytics (admin and owner).
+    """
+    
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return request.user.role in ['admin', 'owner'] or request.user.is_staff
+        return False
+
+
+class IsAPIKeyOwner(permissions.BasePermission):
+    """
+    Permission for API key management.
+    """
+    
+    def has_object_permission(self, request, view, obj):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Check if user is from same organization and has appropriate role
+        return (obj.organization == request.user.organization and 
+                request.user.role in ['admin', 'owner'])
